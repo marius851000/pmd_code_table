@@ -5,8 +5,12 @@ use crate::CodeTableEntryFile;
 /// An error that may occur while decoding a binary with [`CodeToText::decode`]
 #[derive(Debug, Error)]
 pub enum CodeToTextError {
-    #[error("While replacing the characters didn't caused any apparent issue, the resulting UTF-16 string can't be decoded (result : {1:?})")]
-    CantDecodeResult(#[source] FromUtf16Error, Vec<u16>)
+    #[error("The final character of this line is not a valid UTF-16 character. It end with the 16bit code point {1} (partially decoded string: {0:?}). The encoding of the input is likely invalid.")]
+    FinalInvalid(String, u16),
+    #[error("Can't decode the pair of the two number {2} and {3} as a valid UTF-16 character. The input file is likely corrupted (partially decoded string: {1:?})")]
+    CantDecodeUtf16(#[source] FromUtf16Error, String, u16, u16),
+    #[error("There are missing character at the end of the string to decode the value of a placeholder. The input file is likely corrupted")]
+    FinalNotLongEnoughtForData
 }
 
 pub struct CodeToText<'a> {
@@ -17,7 +21,7 @@ impl<'a> CodeToText<'a> {
     pub fn decode(&'a self, text: &[u16]) -> Result<String, CodeToTextError> {
         let mut iterator = text.iter().map(|x| *x);
 
-        let mut result: Vec<u16> = Vec::new(); //TODO: result should be a String to start with
+        let mut result = String::new();
 
         while let Some(point) = iterator.next() {
             struct EncodedData<'a> {
@@ -44,7 +48,7 @@ impl<'a> CodeToText<'a> {
                     if data.entry.lenght > 0 {
                         data.encoded_value = 0;
                         for j in 0..data.entry.lenght {
-                            let this_encoded_char = iterator.next().unwrap(); //TODO:
+                            let this_encoded_char = iterator.next().map_or_else(|| Err(CodeToTextError::FinalNotLongEnoughtForData), Ok)?;
                             data.encoded_value |= (this_encoded_char as u32) << j*16;
                         }
                     };
@@ -54,22 +58,28 @@ impl<'a> CodeToText<'a> {
                     String::new()
                 };
                 
-                println!("{:?}, {:?}", data.entry.string, encoded_value_string);
-                result.push('[' as u16);
-                result.extend(data.entry.string.encode_utf16());
-                result.extend(encoded_value_string.encode_utf16());
-                result.push(']' as u16);
+                result.push('[');
+                result.push_str(&data.entry.string);
+                result.push_str(&encoded_value_string);
+                result.push(']');
             } else {
                 if point == '[' as u16 {
-                    result.extend(&['\\' as u16, '[' as u16]);
+                    result.push_str("\\[");
                 } else if point == '\\' as u16 {
-                    result.extend(&['\\' as u16, '\\' as u16]);
+                    result.push_str("\\\\");
                 } else {
-                    result.push(point);
+                    if let Some(point_as_char) = char::from_u32(point as u32) {
+                        result.push(point_as_char);
+                    } else if let Some(next_point) = iterator.next() {
+                        let decoded_string = String::from_utf16(&[point, next_point]).map_err(|err| CodeToTextError::CantDecodeUtf16(err, result.clone(), point, next_point))?;
+                        result.push_str(&decoded_string);
+                    } else {
+                        return Err(CodeToTextError::FinalInvalid(result, point))
+                    }
                 }
             }
         };
 
-        String::from_utf16(&result).map_err(|err| CodeToTextError::CantDecodeResult(err, result))
+        Ok(result)
     }
 }

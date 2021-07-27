@@ -19,7 +19,9 @@ pub enum TextToCodeError {
     #[error("The placeholder {0:?} is unrecognized")]
     UnknownPlaceholder(String),
     #[error("The value \"{1:?}\" for the placeholder \"{2:?}\" is neither an hardcoded one, nor a base 10 string (or it may be a base 10 number, but superior to 2^32 - 1)")]
-    InvalidValue(#[source] ParseIntError, String, String)
+    InvalidValue(#[source] ParseIntError, String, String),
+    #[error("The placeholder {1:?} has the associated value {0:?}, thought it should less or equal to 255 (hard value for this placeholder type")]
+    CantEncodedParameterEmbeddedData(u32, String)
 }
 
 pub struct TextToCode<'a> {
@@ -72,7 +74,7 @@ impl<'a> TextToCode<'a> {
                     let value_number = u32::from_str_radix(&value, 10).map_err(|err| TextToCodeError::InvalidValue(err, value.clone(), directive.clone()))?;
                     if entry.lenght == 0 {
                         if value_number > 255 {
-                            todo!("error message");
+                            return Err(TextToCodeError::CantEncodedParameterEmbeddedData(value_number, entry.string.clone()))
                         };
                         result.push(entry.value + value_number as u16);
                     } else {
